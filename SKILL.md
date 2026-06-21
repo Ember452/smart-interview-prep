@@ -1,6 +1,6 @@
 ---
 name: "smart-interview-prep"
-version: "2.1.0"
+version: "2.2.0"
 author: "Trae-Agent-Skills"
 description: "全技术栈智能面试模拟器（13个技术域）。支持交互式模拟面试与一键生成题库两种模式，提供6种面试官风格、编码题、JD匹配分析、AI辅助开发考察。自动追问（最多5层），1-10分制加权评分报告。Invoke when user wants interview preparation, mock interview, generating interview questions, JD match analysis, or coding interview practice based on resume/projects."
 tags: [interview, resume, career, mock-interview, question-bank]
@@ -41,6 +41,8 @@ session_memory:
     coding_asked: "是否已进入编码题环节（bool），用于 include_coding 流程校验"
     remaining_time_min: "剩余时间（分钟），每次回答后更新，避免阶段超时"
     asked_questions_hash: "已问问题的归一化 hash 集合，用于出题去重"
+    consecutive_dontknow_count: "连续表示不会的次数（int），达到 3 触发难度调整询问；做出任何回答尝试（含错误答案、部分回答）时归零"
+    answer_viewed_questions: "已查看答案的题目编号列表，用于报告标记（不参与评分计算）"
   ttl: "默认会话结束即清空；不要求跨会话持久化"
 ---
 
@@ -176,6 +178,57 @@ session_memory:
 
 ---
 
+## 不会回答处理机制
+
+当候选人**以放弃姿态明确表示不会当前问题**时（触发词：中文如「不会」「不知道」「答不上来」「想不出来」「没思路」「不懂」；英文如 「I don't know」「no idea」「can't answer」「I'm stuck」），按以下流程处理：
+
+> **上下文判断**：仅当候选人的整体表态为放弃回答时才触发本机制。若触发词后带有实质回答尝试（如「我不太确定，但我觉得…」「I'm not sure, but I think…」），应视为回答尝试而非放弃，继续正常追问流程，`consecutive_dontknow_count` 归零。
+
+### 处理流程
+
+1. **确认阶段**：停止追问，以与当前面试官风格一致的措辞确认，并询问是否需要正确答案：
+   - 示例（`balanced` 风格）：「没关系，这道题确实有一定深度。需要我给出正确答案吗？你可以先看看标准答案再继续。」
+   - 示例（`strict` 风格）：「这个点是高频考点，你应该掌握的。要不要直接看答案？」
+   - 示例（`gentle` 风格）：「没关系，这个问题确实不简单。要不要我帮你梳理一下正确答案？这样后面遇到类似问题你就有思路了。」
+   - 示例（`efficient` 风格）：「需要答案吗？」
+   - 示例（`academic` 风格）：「这个知识点的确需要系统学习才能掌握。需要我给出参考答案吗？」
+   - 示例（`practical` 风格）：「这个是实际工作中经常遇到的。要不要看看正确答案，补一下这块？」
+
+2. **等待用户响应**：用户可选择：
+   - 明确需要答案（如「好」「给我答案」「/answer」「说说」「需要」）
+   - 不需要答案（如「不用」「我再想想」「跳过吧」）
+   - 不回应或模糊回应 → 再确认一次，仍无明确表态则默认跳过，进入下一题
+
+3. **答案检索策略**（用户确认需要答案后执行，按优先级降级）：
+   1. **项目知识库检索**：优先搜索 `reference/tech-*.md` 及相关域文件，查找对应技术栈的考点
+   2. **联网搜索**：若宿主有网，使用 `WebSearch` 检索当前问题的最新标准答案
+   3. **内置知识**：前两者均无结果时，基于模型内置知识给出权威答案
+
+4. **输出答案**：
+   - 给出**结构清晰、要点完整**的正确答案
+   - 标注答案来源（如「根据 reference/tech-backend.md」「根据网络检索」或「基于通用知识」）
+   - 答案输出后，一句自然过渡到下一题（如：「了解了标准答案，我们继续下一题。」）
+
+5. **状态标记**：
+   - 该题标记为「查看答案」，不参与该维度评分（不扣分也不得分）
+   - `topic_round` 不递增（查看答案不计为有效追问）
+   - 重置 `topic_id/topic_round`，自然过渡到下一题
+   - 报告中该题评级列显示「📖 查看答案」
+
+### 触发优先级
+
+- 自然语言「不会」表达 → 触发本机制（优先级高于纠错模式）
+- `/answer` 命令 → 跳过确认阶段，直接检索并输出答案
+- 与 `/hint` 的区别：`/hint` 给出简短提示引导思考，`/answer` 给出完整答案并结束该题
+
+### 特殊情况
+
+- **连续不会**：连续 3 题表示不会 → 以温和口吻询问是否调整题目难度或切换方向（「连续几题你都表示不会，需要我调整题目难度或者换个方向吗？」）
+- **同一话题链内不会**：追问过程中候选人表示不会 → 先确认是否需要答案，若需要则给出该追问点的答案，然后自然结束整个话题链（不再继续追问该话题）
+- **编码题不会**：先按风格给出提示；若明确表示仍然不会 → 展示完整代码实现 + 复杂度分析 + 边界说明，标记为「📖 查看答案」
+
+---
+
 ## JD 匹配（仅在用户提供 JD 时）
 
 执行要点：
@@ -277,14 +330,15 @@ session_memory:
 | `/skip` | P0 | 终止当前话题链，重置 `topic_id/topic_round`，抛下一题 |
 | `/end` | P0 | 终止整场面试，输出完整版报告 |
 | `/hint` | P1 | 输出当前问题简短答题提示，不计入追问轮数 |
+| `/answer` | P1 | 输出当前问题完整正确答案，不计入追问轮数；同时标记该题为"查看答案" |
 | `/report` | P1 | 输出当前阶段精简报告，不结束面试 |
 | `/mode bank` | P0 | 切换到题库模式，清空当前面试状态，仅保留解析后的简历 |
 | `/mode interactive` | P0 | 切换到交互模式，从第 1 题重新开始 |
 | `/lang zh-CN` | P1 | 切换为中文面试，仅开始前有效 |
 | `/lang en-US` | P1 | 切换为英文面试，仅开始前有效 |
-| `/style <name>` | P1 | 切换面试官风格，6 档可选，仅开始前有效 |
+| `/style <name>` | P1 | 切换面试官风格，6 档可选；面试开始后也可切换，切换时输出一句简短过渡话术 |
 
-命令规则：以 `/` 开头优先匹配；大小写不敏感；匹配失败提示「未知命令：XXX。可用命令：/skip /end /hint /report /mode /lang /style」。
+命令规则：以 `/` 开头优先匹配；大小写不敏感；匹配失败提示「未知命令：XXX。可用命令：/skip /end /hint /answer /report /mode /lang /style」。
 
 ---
 
@@ -297,7 +351,8 @@ session {
   mode, topic_id, topic_round (0-5),
   asked_questions, total_count,
   history, history_summary,
-  interview_language, interviewer_style
+  interview_language, interviewer_style,
+  consecutive_dontknow_count, answer_viewed_questions
 }
 ```
 
@@ -306,8 +361,10 @@ session {
 - `topic_round == 5` 必须输出「这个问题我们聊得比较深入了，换个话题继续面试。」
 - 切换新题后 `topic_id` 更新，`topic_round = 0`
 - `total_count >= 25` 自动进入收尾；`< 8` 时收到 `/end` 应提醒参考价值有限并二次确认
+- `consecutive_dontknow_count`：候选人明确表示不会时 +1；做出任何回答尝试（含错误答案、模糊猜测、部分回答）时归零；达到 3 时触发难度调整询问
+- `answer_viewed_questions`：记录查看答案的题号，报告中该题评级显示「📖 查看答案」，不参与评分计算
 
-**长会话降级**：每完成 3-5 题或模式切换时生成 `history_summary`（仅保留：已问主题、强弱项、关键追问结论、跳过题、待补项），后续优先基于 `history_summary + 最近若干轮问答` 维持一致性。完整细则见 `rules/global-rules.md`。
+**长会话降级**：每完成 3-5 题或模式切换时生成 `history_summary`（仅保留：已问主题、强弱项、关键追问结论、跳过题、查看答案题、待补项），后续优先基于 `history_summary + 最近若干轮问答` 维持一致性。完整细则见 `rules/global-rules.md`。
 
 ---
 
@@ -354,6 +411,7 @@ session {
 - 简历解析确认 → `templates/resume-confirm.md`
 - 禁止修改章节结构、评分维度、表格列名、总结位置
 - 反馈措辞须与面试官风格一致
+- 评级列支持特殊标记「📖 查看答案」（该题不参与评分计算，不计入综合得分分母）
 
 ### 模板 Fallback 骨架（宿主持未加载 templates/ 时启用）
 
@@ -363,7 +421,7 @@ session {
 # 🎯 模拟面试报告
 
 ## 基本信息
-- 面试时间、面试语言、岗位背景、总问题数、追问总轮次、跳过题数
+- 面试时间、面试语言、岗位背景、总问题数、追问总轮次、跳过题数、查看答案题数
 
 ## 回答评估
 | # | 问题 | 你的回答要点 | 评级 | 追问 |
