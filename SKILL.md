@@ -1,6 +1,6 @@
 ---
 name: "smart-interview-prep"
-version: "2.2.0"
+version: "2.3.0"
 author: "Trae-Agent-Skills"
 description: "全技术栈智能面试模拟器（13个技术域）。支持交互式模拟面试与一键生成题库两种模式，提供6种面试官风格、编码题、JD匹配分析、AI辅助开发考察。自动追问（最多5层），1-10分制加权评分报告。Invoke when user wants interview preparation, mock interview, generating interview questions, JD match analysis, or coding interview practice based on resume/projects."
 tags: [interview, resume, career, mock-interview, question-bank]
@@ -15,6 +15,7 @@ inputs:
   required: { resume_content: "string | file_path，简历文本或文件路径，二选一" }
   optional:
     mode: { type: string, default: "interactive", enum: [interactive, bank] }
+    round_type: { type: string, default: "full", enum: [full, tech_1, tech_2, tech_3, cross, hr], desc: "面试轮次：full=综合单场（默认，向后兼容）/ tech_1 一面基础 / tech_2 二面项目+设计 / tech_3 三面深度 / cross 交叉面 / hr HR面" }
     position_background: { type: string, default: "", desc: "候选人背景参考，不限制出题" }
     language: { type: string, default: "auto", enum: [auto, zh-CN, en-US] }
     focus_areas: { type: array, default: [] }
@@ -34,6 +35,7 @@ session_memory:
   # 选填：辅助状态，interactive 模式推荐维护，bank 模式可不维护
   required: [resume_parsed_data, mode, topic_id, topic_round, asked_questions, total_count, history, history_summary, position_background, interview_language, interviewer_style, duration_total, jd_parsed_data]
   optional:
+    round_type: "面试轮次（full/tech_1/tech_2/tech_3/cross/hr），未指定时默认 full（综合单场），决定阶段权重与出题重心"
     error_mode: "纠错模式（strict/guide），未指定时默认 strict"
     weaknesses_observed: "已观察到的薄弱点列表（每条 ≤ 50 字），用于后续针对性追问"
     pending_followups: "待跟进的追问队列（[{topic, round, reason}...]）"
@@ -121,6 +123,26 @@ session_memory:
 | `bank` | 解析简历 → 一次性输出分类题库（不进入互动） |
 
 **`focus_areas` 使用**：用户指定则优先围绕该方向组题；空则按简历自动全量覆盖。出题可扩展到关联方向（同类对比、规模放大、领域故障、技术演进），不得扩展到完全无关领域。详见 `rules/interview-process.md`。
+
+---
+
+## 面试轮次（round_type）
+
+真实大厂是**多轮次、各有侧重**的（技术一面→二面→三面/交叉面→HR 面）。`round_type` 决定本场模拟哪一轮，不同轮次的出题重心与阶段权重不同：
+
+| round_type | 主考重心 | 阶段权重倾斜 |
+|-----------|---------|------------|
+| `full`（默认） | 破冰→项目→设计→技术→行为→编码→反问全流程 | 按标准阶段分配表 |
+| `tech_1` | 基础八股 + 手撕 + 项目概览（卡基本功） | 技术考察↑、编码↑、系统设计↓ |
+| `tech_2` | 项目深挖 + 系统设计 | 项目深挖↑、系统设计↑ |
+| `tech_3` | 架构深度 + 技术广度 + 影响力 | 系统设计↑、行为↑ |
+| `cross` | 跨领域基础 + 通用能力 + 沟通 | 通用基础↑、行为↑ |
+| `hr` | 动机、稳定性、价值观、薪资（不深挖技术） | 行为/软素质↑、技术↓ |
+
+- 未指定 `round_type` 时默认 `full`，保持原有单场全流程行为（向后兼容）
+- 指定具体轮次时，开场白点明本轮定位，按重心调整出题；`hr` 轮走行为题库保持轻量
+- 报告「录用建议」结合本轮 `round_type` 给出"是否可进入下一轮"
+- 完整轮次模型（难度门槛、阶段细分）见 `rules/interview-process.md` 的"面试轮次模型"
 
 ---
 
@@ -249,8 +271,9 @@ session_memory:
 3. LeetCode Hot100 题目天然贴近大厂算法面——优先选中等难度，easy 作为热身，hard 作为加分挑战
 4. 难度根据前面表现动态调整；review 时追问时间/空间复杂度、边界、优化方向
 5. 卡住时按风格给提示（`strict` 几乎不给，`gentle` 分步引导）
-6. **评分机制**：每道编码题在"技术深度"维度下单独打分（1-10 分制），与项目/技术原理题共享同一权重池；最终技术深度分 = 该维度下所有题目评分的算术平均
-7. 分数纳入技术深度维度，不单独计分
+6. **现场表现评估**：手撕不只看 AC，review 时按"先讲思路 / 边界处理 / dry run 验证 / 复杂度分析 / 边写边说 / 代码质量 / 优化意识"清单评分（完整清单见 `reference/coding-challenges.md`）
+7. **评分机制**：每道编码题在"技术深度"维度下单独打分（1-10 分制），与项目/技术原理题共享同一权重池；最终技术深度分 = 该维度下所有题目评分的算术平均
+8. 分数纳入技术深度维度，不单独计分
 
 ---
 
@@ -270,6 +293,20 @@ session_memory:
 - **基础设施**：限流器、分布式 ID、配置中心、服务发现、消息队列
 
 **评分维度覆盖**：系统设计能力（15% 权重），见评分 Rubric。
+
+---
+
+## 行为面试与反问环节
+
+行为面试考察**软素质与真实经历**（影响力/Ownership、冲突处理、抗压、失败复盘），大厂权重高。
+
+**执行要点**：
+1. **必须用 STAR 追问法**逐层逼出细节（Situation→Task→Action→Result），识别"背模板"与"真经历"
+2. 候选人说"我们"时必追问"**你**具体做了什么"；无量化时追问具体数据
+3. 行为题**不单设权重维度**，按内容映射到思维逻辑/表达能力/学习能力/项目经验（见 `reference/score-rubric.md`）
+4. **反问环节**：收尾前主动邀请反问，并按质量分档（优秀/一般/偏弱）记入报告「录用建议」
+
+完整题库、STAR 追问链、HR 轮题与反问评估细则见 `reference/behavioral-questions.md`。
 
 ---
 
@@ -411,6 +448,7 @@ session {
 - 简历解析确认 → `templates/resume-confirm.md`
 - 禁止修改章节结构、评分维度、表格列名、总结位置
 - 反馈措辞须与面试官风格一致
+- **录用建议章节必填**：`/end` 报告必须包含「录用建议」（录用倾向 + 定级参考 + 是否进下一轮 + 软素质观察 + 反问评价 + 若挂归因），映射规则见 `reference/score-rubric.md`
 - 评级列支持特殊标记「📖 查看答案」（该题不参与评分计算，不计入综合得分分母）
 
 ### 模板 Fallback 骨架（宿主持未加载 templates/ 时启用）
@@ -421,7 +459,7 @@ session {
 # 🎯 模拟面试报告
 
 ## 基本信息
-- 面试时间、面试语言、岗位背景、总问题数、追问总轮次、跳过题数、查看答案题数
+- 面试时间、面试轮次（round_type）、面试语言、岗位背景、总问题数、追问总轮次、跳过题数、查看答案题数
 
 ## 回答评估
 | # | 问题 | 你的回答要点 | 评级 | 追问 |
@@ -438,6 +476,13 @@ X.X / 10（加权计算）
 | 思维逻辑 | X.X | ... |
 | 表达能力 | X.X | ... |
 | 学习能力 | X.X | ... |
+
+## 录用建议
+- 录用倾向：强烈推荐/推荐/待定/不推荐/明确拒绝（按综合得分映射）
+- 定级参考：约等于 {初级/中级/高级/专家}
+- 是否可进入下一轮：是/否/存疑
+- 软素质观察 + 反问环节评价
+- 若本轮挂了，最可能的原因（1-2 条）
 
 ## 突出问题
 
@@ -474,7 +519,8 @@ X.X / 10（加权计算）
 - 全局规则、异常兜底、会话维护细则：`rules/global-rules.md`
 - 流程、出题原则、追问策略、一问一答、追问链、弱点预判：`rules/interview-process.md`
 - 面试官风格话术（6 档开场白 + 反馈模板）：`reference/interviewer-styles.md`
-- 评分 Rubric 完整锚点（6 维度 × 5 档）：`reference/score-rubric.md`
+- 评分 Rubric 完整锚点（6 维度 × 5 档）、录用结论与定级映射：`reference/score-rubric.md`
+- 行为面试题库（STAR 追问 + HR 轮 + 反问评估）：`reference/behavioral-questions.md`
 - 编码题集：`reference/coding-challenges.md`
 - 语种规则：`reference/level-language-rules.md`
 - 技术栈考点库索引：`reference/tech-index.md`，分域文件见 `reference/tech-*.md`（共 13 个域）
