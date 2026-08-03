@@ -2,7 +2,7 @@
 name: "smart-interview-prep"
 version: "3.0.0"
 author: "Trae-Agent-Skills"
-description: "全技术栈智能面试模拟器（14个技术域，含 AI Agent 工程）。支持交互式模拟面试与一键生成题库两种模式，提供6种面试官风格、编码题、JD匹配分析、AI辅助开发考察。大厂实证9种项目深挖模式，自动追问（单话题最多5层，深钻链最多10层），1-10分制加权评分报告。Invoke when user wants interview preparation, mock interview, generating interview questions, JD match analysis, or coding interview practice based on resume/projects."
+description: "全技术栈智能面试模拟器（14个技术域，含 AI Agent 工程）。支持交互式模拟面试与一键生成题库两种模式，提供6种面试官风格、编码题、JD匹配分析、AI辅助开发考察。大厂实证10种项目深挖模式（含规模必要性质疑），自动追问（单话题最多5层，深钻链最多10层），降级追问与简历风险点预检，1-10分制加权评分报告。Invoke when user wants interview preparation, mock interview, generating interview questions, JD match analysis, or coding interview practice based on resume/projects."
 tags: [interview, resume, career, mock-interview, question-bank]
 constraints:
   max_follow_up_rounds: 5
@@ -174,7 +174,8 @@ session_memory:
 收到简历与可选参数后，按顺序执行：
 
 1. **简历解析确认**：按 `templates/resume-confirm.md` 输出解析结果，候选人确认
-2. **配置确认块**（强制，固定格式）：
+2. **简历风险点预检**（强制）：解析确认后必须输出「⚠️ 简历风险点预检」——扫描简历中的空量化指标、不实陈述、个人项目堆分布式组件、名词堆砌、时间线矛盾等风险信号并逐条提示（风险信号表与输出格式见 `templates/resume-confirm.md`），让候选人在面试开始前有机会补数据/修正表述；命中"个人项目堆分布式组件"时记入 `weaknesses_observed`，项目深挖阶段必走「规模必要性质疑」
+3. **配置确认块**（强制，固定格式）：
 
 ```
 ⚙️ 本场面试配置
@@ -186,6 +187,7 @@ session_memory:
 
 3. 候选人确认（或调整参数）后，`config_confirmed = true`，才允许输出第一题
 4. 未确认前禁止出题；候选人未回复调整项直接给新内容时，提示先完成确认
+5. **配置确认块增加背景自适应提示**：校招/实习候选人在配置确认块中自动提示「你目前是校招/实习背景，大厂一面普遍考察基础八股 + 手撕代码。建议：开启编码题，技术考察占比已上调」
 
 ---
 
@@ -222,6 +224,8 @@ session_memory:
 
 > **阶段时长校验**：各档总和均严格匹配 `duration`，执行时按当前所在阶段与累计用时动态调整；进入新阶段时如发现累计已超出，缩短后续阶段。**编码题仅在 `include_coding == true` 时安排**；当编码题被关闭时，对应时长**回收至"技术考察"**（即技术考察阶段实际时长 = 表中数 + 编码题时长）。
 
+> **候选人背景自适应**：校招/实习候选人（无全职经验）的技术考察时长额外吸收系统设计降权后的时长（30 min 场系统设计取消→并入技术考察），且**自动建议开启编码题**（大厂实习一面普遍有手撕环节）；社招候选人维持上表不变。识别规则与阶段权重调整详见 `rules/interview-process.md` 的"候选人背景自适应"。
+
 ---
 
 ## 纠错模式
@@ -240,6 +244,12 @@ session_memory:
 - **禁止合并语义**："error_mode=strict + style=gentle" 不应被解释为"用 gentle 方式尽早纠正"
 
 纠错措辞须与面试官风格一致（见 `reference/interviewer-styles.md`）。
+
+---
+
+## 降级追问（回答差但未放弃时，先降级再考察）
+
+候选人**未明确表示放弃但回答质量差**（答错、模糊、只答一半）时，不直接给答案或换题，先做**降级追问**：沿知识依赖链降 1-2 级到更基础考点再问一次，摸清知识下限。降级链设计、执行规则、与"不会回答处理机制"的边界详见 `rules/interview-process.md` 的"降级追问机制"。降级后仍答不上 → 走下方「不会回答处理机制」。
 
 ---
 
@@ -375,9 +385,9 @@ session_memory:
 
 ---
 
-## 大厂项目深挖模式（面经实证，9 种）
+## 大厂项目深挖模式（面经实证，10 种）
 
-真实大厂面试官对项目的深挖模式高度可复用。每场面试至少覆盖 4-5 种（难点前置 + 全链路讲解必选）：
+真实大厂面试官对项目的深挖模式高度可复用。每场面试至少覆盖 4-5 种（难点前置 + 全链路讲解必选，个人项目/校招候选人必加"规模必要性质疑"）：
 
 | # | 模式 | 核心句式 | 考察点 |
 |---|------|---------|--------|
@@ -390,6 +400,7 @@ session_memory:
 | 7 | 挑战式质疑 | "这不就会带来主从延迟吗？" | 抗压、守防与权衡 |
 | 8 | 行业对标 | "调研过行业主流方案吗？怎么借鉴的？" | 视野广度 |
 | 9 | 复盘反思 | "如果重做会怎么调整？后续规划？" | 复盘深度 |
+| 10 | 规模必要性质疑 | "部署了几台机器？单实例为什么要用分布式锁/Single-flight？" | 方案必要性、规模认知、退化方案（个人项目/校招必用） |
 
 每种模式的完整追问链与评分信号见 `rules/interview-process.md` 的"大厂项目深挖模式"。
 
